@@ -11,8 +11,8 @@ A post is not sent merely because it contains a `discord.gg/` link. The monitor 
 | Rule | Default | Behavior |
 |---|---:|---|
 | Minimum server members | `10` | Rejects a server below this approximate member count |
-| Maximum server members | `1000` | Rejects a server above this approximate member count |
-| Non-Japanese-content score | `3` | Rejects content that appears predominantly non-Japanese across the post, author name, server name, and server description |
+| Maximum server members | `1000` | Rejects a server with this many members or more |
+| Non-Japanese-content score | `3` | Scores the X display name, X username, post text, server name, and server description separately; rejects at the threshold |
 | Spam markers | — | Rejects posts containing `$` or `#`, verified-account posts, and long English-heavy posts with media |
 | Default notification content | — | Sends **only the Discord invite URL**; it never sends an X post URL, server name, member count, or author |
 
@@ -20,7 +20,7 @@ The non-Japanese-content check is a relevance heuristic based on textual signals
 
 ## What is public and what is private
 
-The repository contains code, the workflow definition, and `state/seen.json` (a list of processed post IDs). It does **not** contain account cookies, Playwright storage state, Discord webhook URLs, or other credentials.
+The repository contains code, the workflow definition, and `seen.json` (a list of processed Discord invite links). It does **not** contain account cookies, Playwright storage state, Discord webhook URLs, or other credentials.
 
 | Item | Where it belongs | Never commit it? |
 |---|---|---:|
@@ -43,11 +43,11 @@ You may optionally add the following repository variables under **Settings → S
 | Variable | Default | Purpose |
 |---|---:|---|
 | `SEARCH_QUERY` | `discord.gg/` | X search query |
-| `SCROLL_ROUNDS` | `20` | Number of result-page scrolls per run |
+| `SCROLL_ROUNDS` | `30` | Number of result-page scrolls per run |
 | `MIN_MEMBER_COUNT` | `10` | Lowest allowed server size |
 | `MAX_MEMBER_COUNT` | `1000` | Highest allowed server size |
 | `NON_JAPANESE_SCORE_THRESHOLD` | `3` | Lower values reject more non-Japanese content |
-| `SPAM_TEXT_MIN_LENGTH` | `120` | Long-post spam threshold |
+| `SPAM_TEXT_MIN_LENGTH` | `100` | Long-post spam threshold |
 | `SPAM_ENGLISH_RATIO` | `0.6` | English-heavy spam threshold |
 | `DISCORD_API_DELAY_MS` | `300` | Delay between Discord invite API lookups |
 
@@ -61,6 +61,6 @@ GitHub-hosted scheduled workflows are best effort and can begin later than their
 
 ## State and safety
 
-`state/seen.json` avoids repeatedly processing the same post. The file is public with the repository and therefore contains only post IDs, never cookies, webhooks, or other credentials. If GitHub reports a permission error when saving this file, open **Settings → Actions → General** and allow workflows to have **Read and write permissions**.
+`seen.json` avoids repeatedly processing the same Discord invite link. The file is public with the repository and therefore contains only invite URLs, never cookies, webhooks, or other credentials. If GitHub reports a permission error when saving this file, open **Settings → Actions → General** and allow workflows to have **Read and write permissions**.
 
 Do not publish `auth.json`, a webhook URL, cookies, `.env` files, or logs containing sensitive values.

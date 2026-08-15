@@ -8,9 +8,7 @@ cokies*.json
 
 # Local/generated runtime files
 node_modules/
-seen.json
-!state/
-!state/seen.json
+# seen.json is committed intentionally so scheduled runs remember processed invites.
 
 # Logs and editor files
 *.log
