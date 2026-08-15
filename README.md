@@ -1,51 +1,66 @@
 # X search → Discord notification monitor
 
-This project checks X search results once with Playwright, detects `discord.gg/` links, and sends new matches to a Discord webhook. GitHub Actions invokes the job every 15 minutes.
+This project checks X search results once with Playwright and notifies Discord only when a Discord invite passes the configured member-count, language-relevance, and spam filters. GitHub Actions is configured for a 15-minute schedule, but the workflow is currently **disabled pending review of the restored filters**.
 
 > The project uses an authenticated browser session. Use only an account and access method that you are authorized to use, and make sure the workflow complies with X's rules. X may challenge or invalidate sessions from GitHub-hosted runners.
 
+## Notification rules
+
+A post is not sent merely because it contains a `discord.gg/` link. The monitor first applies the following checks.
+
+| Rule | Default | Behavior |
+|---|---:|---|
+| Minimum server members | `10` | Rejects a server below this approximate member count |
+| Maximum server members | `1000` | Rejects a server above this approximate member count |
+| Non-Japanese-content score | `3` | Rejects content that appears predominantly non-Japanese across the post, author name, server name, and server description |
+| Spam markers | — | Rejects posts containing `$` or `#`, verified-account posts, and long English-heavy posts with media |
+| Default notification content | — | Sends **only the Discord invite URL**; it never sends an X post URL, server name, member count, or author |
+
+The non-Japanese-content check is a relevance heuristic based on textual signals; it does not attempt to identify a person’s nationality. Discord notifications contain only the Discord invite URL.
+
 ## What is public and what is private
 
-The repository contains code, the workflow definition, and `state/seen.json` (the list of processed post IDs). It does **not** contain account cookies, Playwright storage state, Discord webhook URLs, or other credentials.
+The repository contains code, the workflow definition, and `state/seen.json` (a list of processed post IDs). It does **not** contain account cookies, Playwright storage state, Discord webhook URLs, or other credentials.
 
 | Item | Where it belongs | Never commit it? |
 |---|---|---:|
 | X session storage JSON | `AUTH_JSON` GitHub repository secret | Yes |
 | Discord webhook URL | `DISCORD_WEBHOOK_URL` GitHub repository secret | Yes |
-| Search query | `SEARCH_QUERY` GitHub Actions variable, optional | No secret required |
+| Search query and filter values | GitHub Actions variables, optional | No secret required |
 | Processed post IDs | `state/seen.json` in this repository | No; it is committed after successful runs |
 
-## One-time GitHub configuration
+## GitHub Actions configuration
 
-Open the repository's **Settings** page, then select **Secrets and variables → Actions**. Create the following **repository secrets**:
+The repository needs these two repository secrets:
 
 | Secret name | Value |
 |---|---|
-| `AUTH_JSON` | The complete content of your Playwright `auth.json` file, as raw JSON |
-| `DISCORD_WEBHOOK_URL` | Your full Discord webhook URL |
+| `AUTH_JSON` | Complete Playwright `auth.json` content as raw JSON |
+| `DISCORD_WEBHOOK_URL` | Full Discord webhook URL |
 
-Optionally, create a repository variable named `SEARCH_QUERY`. If it is omitted, the workflow searches for `discord.gg/`.
+You may optionally add the following repository variables under **Settings → Secrets and variables → Actions → Variables**.
 
-The workflow commits the updated `state/seen.json` after each successful run. If GitHub reports a permission error at that step, open **Settings → Actions → General** and allow workflows to have **Read and write permissions**.
+| Variable | Default | Purpose |
+|---|---:|---|
+| `SEARCH_QUERY` | `discord.gg/` | X search query |
+| `SCROLL_ROUNDS` | `20` | Number of result-page scrolls per run |
+| `MIN_MEMBER_COUNT` | `10` | Lowest allowed server size |
+| `MAX_MEMBER_COUNT` | `1000` | Highest allowed server size |
+| `NON_JAPANESE_SCORE_THRESHOLD` | `3` | Lower values reject more non-Japanese content |
+| `SPAM_TEXT_MIN_LENGTH` | `120` | Long-post spam threshold |
+| `SPAM_ENGLISH_RATIO` | `0.6` | English-heavy spam threshold |
+| `DISCORD_API_DELAY_MS` | `300` | Delay between Discord invite API lookups |
 
-## Start and monitor the workflow
-
-After adding the two secrets, open the **Actions** tab, choose **Monitor X search results**, and select **Run workflow** to perform an initial test. Scheduled runs then use this cron expression:
+The workflow uses this UTC cron schedule:
 
 ```text
 7,22,37,52 * * * *
 ```
 
-GitHub schedules these times in UTC. The job may start later than the requested minute when GitHub's hosted runners are busy, so this is a best-effort 15-minute schedule rather than a strict real-time service.
+GitHub-hosted scheduled workflows are best effort and can begin later than their requested minute when runners are busy.
 
-## Local testing
+## State and safety
 
-Create a local `auth.json`, set the webhook as an environment variable, then run:
-
-```bash
-npm ci
-npx playwright install chromium
-DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..." npm start
-```
+`state/seen.json` avoids repeatedly processing the same post. The file is public with the repository and therefore contains only post IDs, never cookies, webhooks, or other credentials. If GitHub reports a permission error when saving this file, open **Settings → Actions → General** and allow workflows to have **Read and write permissions**.
 
 Do not publish `auth.json`, a webhook URL, cookies, `.env` files, or logs containing sensitive values.
