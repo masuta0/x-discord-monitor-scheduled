@@ -1,0 +1,16 @@
+{
+  "name": "x-discord-monitor-scheduled",
+  "version": "1.0.0",
+  "private": false,
+  "description": "Run an X search monitor once and send Discord webhook notifications.",
+  "main": "monitor.js",
+  "scripts": {
+    "start": "node monitor.js"
+  },
+  "dependencies": {
+    "playwright": "^1.47.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

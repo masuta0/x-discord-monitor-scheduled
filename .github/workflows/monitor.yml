@@ -1,0 +1,54 @@
+name: Monitor X search results
+
+on:
+  schedule:
+    # Every 15 minutes, offset from the top of the hour to reduce congestion.
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: x-discord-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the latest state
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Check X and notify Discord
+        env:
+          AUTH_JSON: ${{ secrets.AUTH_JSON }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SEARCH_QUERY: ${{ vars.SEARCH_QUERY || 'discord.gg/' }}
+        run: npm start
+
+      - name: Persist duplicate-detection state
+        run: |
+          if git diff --quiet -- state/seen.json; then
+            echo "No state changes to persist."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/seen.json
+          git commit -m "chore: update seen post IDs [skip ci]"
+          git push

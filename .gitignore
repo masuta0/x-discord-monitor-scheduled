@@ -1,0 +1,15 @@
+# Credentials and session data
+auth.json
+cookies*.json
+cokies*.json
+*.secret
+.env
+.env.*
+
+# Local/generated runtime files
+node_modules/
+seen.json
+
+# Logs and editor files
+*.log
+.DS_Store
