@@ -39,6 +39,7 @@ jobs:
           AUTH_JSON: ${{ secrets.AUTH_JSON }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           SEARCH_QUERY: ${{ vars.SEARCH_QUERY || 'discord.gg/' }}
+          SCROLL_ROUNDS: ${{ vars.SCROLL_ROUNDS || '60' }}
         run: npm start
 
       - name: Persist duplicate-detection state

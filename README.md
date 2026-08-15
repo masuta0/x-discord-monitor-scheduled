@@ -43,7 +43,7 @@ You may optionally add the following repository variables under **Settings → S
 | Variable | Default | Purpose |
 |---|---:|---|
 | `SEARCH_QUERY` | `discord.gg/` | X search query |
-| `SCROLL_ROUNDS` | `30` | Number of result-page scrolls per run |
+| `SCROLL_ROUNDS` | `60` | Number of result-page scrolls per run |
 | `MIN_MEMBER_COUNT` | `10` | Lowest allowed server size |
 | `MAX_MEMBER_COUNT` | `1000` | Highest allowed server size |
 | `NON_JAPANESE_SCORE_THRESHOLD` | `3` | Lower values reject more non-Japanese content |

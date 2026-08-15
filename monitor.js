@@ -7,7 +7,7 @@
  *   DISCORD_WEBHOOK_URL : 通知先のDiscord Webhook URL
  *   AUTH_JSON           : auth.json の中身をそのまま貼り付けた文字列 (Railway等)
  *   SEARCH_QUERY        : (任意) デフォルトは 'discord.gg/'
- *   SCROLL_ROUNDS        : (任意) スクロール回数。デフォルト20(多めに取得)
+ *   SCROLL_ROUNDS        : (任意) スクロール回数。デフォルト60(多めに取得)
  *   CHROMIUM_PATH       : (任意) Chromium のパス
  *   MIN_MEMBER_COUNT    : (任意) この人数未満のサーバーは通知しない。デフォルト10
  *   MAX_MEMBER_COUNT    : (任意) この人数以上のサーバーは通知しない。デフォルト1000
@@ -50,7 +50,7 @@ const AUTH_FILE = path.join(__dirname, 'auth.json');
 const SEEN_FILE = path.join(__dirname, 'seen.json');
 const DISCORD_INVITE_REGEX = /discord\.gg\/[A-Za-z0-9-]+/g;
 const MAX_SEEN = 5000; // 肥大化防止
-const SCROLL_ROUNDS = Number(process.env.SCROLL_ROUNDS || 30);
+const SCROLL_ROUNDS = Number(process.env.SCROLL_ROUNDS || 60);
 
 // 10人未満など、まだ小さすぎるサーバーは対象外にする
 const MIN_MEMBER_COUNT = Number(process.env.MIN_MEMBER_COUNT || 10);
