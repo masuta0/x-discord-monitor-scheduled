@@ -41,6 +41,15 @@ jobs:
           DISCORD_WEBHOOK_URL_SECONDARY: ${{ secrets.DISCORD_WEBHOOK_URL_SECONDARY }}
           SEARCH_QUERY: ${{ vars.SEARCH_QUERY || 'discord.gg/' }}
           SCROLL_ROUNDS: ${{ vars.SCROLL_ROUNDS || '60' }}
+          MIN_MEMBER_COUNT: ${{ vars.MIN_MEMBER_COUNT || '10' }}
+          MAX_MEMBER_COUNT: ${{ vars.MAX_MEMBER_COUNT || '1000' }}
+          FOREIGN_SCORE_THRESHOLD: ${{ vars.FOREIGN_SCORE_THRESHOLD || '3' }}
+          SPAM_TEXT_MIN_LENGTH: ${{ vars.SPAM_TEXT_MIN_LENGTH || '100' }}
+          SPAM_ENGLISH_RATIO: ${{ vars.SPAM_ENGLISH_RATIO || '0.6' }}
+          DISCORD_API_DELAY_MS: ${{ vars.DISCORD_API_DELAY_MS || '300' }}
+          SEARCH_SETTLE_MIN_MS: ${{ vars.SEARCH_SETTLE_MIN_MS || '1200' }}
+          SEARCH_SETTLE_JITTER_MS: ${{ vars.SEARCH_SETTLE_JITTER_MS || '800' }}
+          MAX_IDLE_SCROLL_ROUNDS: ${{ vars.MAX_IDLE_SCROLL_ROUNDS || '4' }}
         run: npm start
 
       - name: Persist duplicate-detection state

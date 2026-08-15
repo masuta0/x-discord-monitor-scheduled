@@ -12,9 +12,12 @@
  *   MIN_MEMBER_COUNT    : (任意) この人数未満のサーバーは通知しない。デフォルト10
  *   MAX_MEMBER_COUNT    : (任意) この人数以上のサーバーは通知しない。デフォルト1000
  *   FOREIGN_SCORE_THRESHOLD: (任意) 外国人サーバー判定スコアの閾値。デフォルト3
- *   SPAM_TEXT_MIN_LENGTH: (任意) この文字数を超え、かつ他の条件も満たすとスパム扱い。デフォルト120
+ *   SPAM_TEXT_MIN_LENGTH: (任意) この文字数を超え、かつ他の条件も満たすとスパム扱い。デフォルト100
  *   SPAM_ENGLISH_RATIO  : (任意) 英字比率がこれ以上だと「英語の投稿」と判定。デフォルト0.6
  *   DISCORD_API_DELAY_MS: (任意) Discord invite API 呼び出し間の待機時間(ms)。デフォルト300
+ *   SEARCH_SETTLE_MIN_MS: (任意) X検索結果の追加読み込みを待つ最小時間(ms)。デフォルト1200
+ *   SEARCH_SETTLE_JITTER_MS: (任意) 追加待機のランダム幅(ms)。デフォルト800
+ *   MAX_IDLE_SCROLL_ROUNDS: (任意) 新しい投稿が現れない連続スクロール回数の上限。デフォルト4
  *
  * 重複防止のため、送信済みの招待リンクを seen.json に保存する。
  *
@@ -64,8 +67,9 @@ const SPAM_ENGLISH_RATIO = Number(process.env.SPAM_ENGLISH_RATIO || 0.6);
 // Discord invite API を連打しないための待機時間
 const DISCORD_API_DELAY_MS = Number(process.env.DISCORD_API_DELAY_MS || 300);
 const FOREIGN_SCORE_THRESHOLD = Number(process.env.FOREIGN_SCORE_THRESHOLD || 3);
-const SEARCH_SETTLE_MIN_MS = Number(process.env.SEARCH_SETTLE_MIN_MS || 700);
-const SEARCH_SETTLE_JITTER_MS = Number(process.env.SEARCH_SETTLE_JITTER_MS || 400);
+const SEARCH_SETTLE_MIN_MS = Number(process.env.SEARCH_SETTLE_MIN_MS || 1200);
+const SEARCH_SETTLE_JITTER_MS = Number(process.env.SEARCH_SETTLE_JITTER_MS || 800);
+const MAX_IDLE_SCROLL_ROUNDS = Number(process.env.MAX_IDLE_SCROLL_ROUNDS || 4);
 
 
 // 環境変数から auth.json を復元
@@ -195,6 +199,16 @@ async function sendToDiscord(inviteUrl) {
   }));
 }
 
+function takeFreshTweets(batch, seenPostKeys) {
+  return batch.filter((tweet) => {
+    // status URL が得られない場合も本文・投稿者の組で二重集計を防ぐ。
+    const postKey = tweet.postKey || `${tweet.xUserName}\n${tweet.text}`;
+    if (seenPostKeys.has(postKey)) return false;
+    seenPostKeys.add(postKey);
+    return true;
+  });
+}
+
 async function runOnce() {
   if (DISCORD_WEBHOOK_URLS.length === 0) {
     throw new Error('DISCORD_WEBHOOK_URL を環境変数に設定してください。');
@@ -248,8 +262,12 @@ async function runOnce() {
       console.log('ツイートが見つかりませんでした(検索結果0件、またはページ構造変更の可能性)。');
     });
 
-    // スクロール→見えている分を読み取る→読み取った要素はDOMから削除、を繰り返す。
-    // メモリに余裕があっても、DOMを無限に太らせないための良い習慣として維持する。
+    // Xの仮想リストは投稿要素を自動的に入れ替える。ここで article を手動削除すると、
+    // 次の追加読み込みが止まることがあるため、DOMはX側に管理させ、投稿URLで重複を除く。
+    const seenPostKeys = new Set();
+    let idleScrollRounds = 0;
+    let scrollRoundsCompleted = 0;
+
     for (let i = 0; i < SCROLL_ROUNDS; i++) {
       if (i > 0) {
         await page.mouse.wheel(0, randomInt(1400, 2600));
@@ -274,14 +292,35 @@ async function runOnce() {
           const hasMedia = !!el.querySelector(
             '[data-testid="tweetPhoto"], [data-testid="videoPlayer"], [data-testid="videoComponent"]'
           );
-          el.remove();
-          return { text, verified, hasMedia, xDisplayName, xUserName };
+          const statusLink = Array.from(el.querySelectorAll('a[href*="/status/"]'))
+            .map((anchor) => anchor.getAttribute('href'))
+            .find((href) => /\/[^/]+\/status\/\d+/.test(href || ''));
+          return { postKey: statusLink || '', text, verified, hasMedia, xDisplayName, xUserName };
         });
       });
 
-      if (batch.length === 0 && i > 0) break; // 新規に読み込まれる分がなくなったら打ち切り
-      tweets = tweets.concat(batch);
+      const freshTweets = takeFreshTweets(batch, seenPostKeys);
+
+      scrollRoundsCompleted = i + 1;
+      if (freshTweets.length === 0 && i > 0) {
+        idleScrollRounds++;
+      } else {
+        idleScrollRounds = 0;
+        tweets = tweets.concat(freshTweets);
+      }
+
+      // X側の追加読み込みは一時的に空になることがあるため、1回だけでは終了しない。
+      if (i > 0 && idleScrollRounds >= MAX_IDLE_SCROLL_ROUNDS) break;
     }
+
+    const extractedInviteUrls = new Set(
+      tweets.flatMap((tweet) => tweet.text.match(DISCORD_INVITE_REGEX) || [])
+        .map((invite) => invite.toLowerCase())
+    );
+    console.log(
+      `X検索取得: ${tweets.length}件のユニーク投稿、${extractedInviteUrls.size}件のDiscord招待URL ` +
+      `(${scrollRoundsCompleted}/${SCROLL_ROUNDS}回スクロール、連続空読込: ${idleScrollRounds}回)`
+    );
   } finally {
     // 途中でエラーが起きてもブラウザは必ず閉じる(閉じ忘れによるゾンビプロセス化を防止)
     if (browser) {
@@ -359,7 +398,7 @@ async function runOnce() {
   return newCount;
 }
 
-module.exports = { runOnce };
+module.exports = { runOnce, takeFreshTweets };
 
 // `node monitor.js` で直接実行した場合(Railwayの Cron Schedule 実行を含む)
 if (require.main === module) {

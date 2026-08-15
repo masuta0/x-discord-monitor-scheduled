@@ -5,7 +5,8 @@
   "description": "Run an X search monitor once and send Discord webhook notifications.",
   "main": "monitor.js",
   "scripts": {
-    "start": "node monitor.js"
+    "start": "node monitor.js",
+    "test": "node test-monitor.js"
   },
   "dependencies": {
     "playwright": "^1.47.0"

@@ -1,6 +1,6 @@
 # X search → Discord notification monitor
 
-This project checks X search results once with Playwright and notifies Discord only when a Discord invite passes the configured member-count, language-relevance, and spam filters. GitHub Actions is configured for a 15-minute schedule, but the workflow is currently **disabled pending review of the restored filters**.
+This project checks X search results once with Playwright and notifies Discord only when a Discord invite passes the configured member-count, language-relevance, and spam filters. GitHub Actions runs the monitor on a 15-minute schedule.
 
 > The project uses an authenticated browser session. Use only an account and access method that you are authorized to use, and make sure the workflow complies with X's rules. X may challenge or invalidate sessions from GitHub-hosted runners.
 
@@ -27,7 +27,7 @@ The repository contains code, the workflow definition, and `seen.json` (a list o
 | X session storage JSON | `AUTH_JSON` GitHub repository secret | Yes |
 | Discord webhook URL | `DISCORD_WEBHOOK_URL` GitHub repository secret | Yes |
 | Search query and filter values | GitHub Actions variables, optional | No secret required |
-| Processed post IDs | `state/seen.json` in this repository | No; it is committed after successful runs |
+| Processed invite URLs | `seen.json` in this repository | No; it is committed after successful runs |
 
 ## GitHub Actions configuration
 
@@ -47,10 +47,13 @@ You may optionally add the following repository variables under **Settings → S
 | `SCROLL_ROUNDS` | `60` | Number of result-page scrolls per run |
 | `MIN_MEMBER_COUNT` | `10` | Lowest allowed server size |
 | `MAX_MEMBER_COUNT` | `1000` | Highest allowed server size |
-| `NON_JAPANESE_SCORE_THRESHOLD` | `3` | Lower values reject more non-Japanese content |
+| `FOREIGN_SCORE_THRESHOLD` | `3` | Lower values reject more foreign-server signals |
 | `SPAM_TEXT_MIN_LENGTH` | `100` | Long-post spam threshold |
 | `SPAM_ENGLISH_RATIO` | `0.6` | English-heavy spam threshold |
 | `DISCORD_API_DELAY_MS` | `300` | Delay between Discord invite API lookups |
+| `SEARCH_SETTLE_MIN_MS` | `1200` | Minimum wait for new X results after each scroll |
+| `SEARCH_SETTLE_JITTER_MS` | `800` | Randomized additional wait after each scroll |
+| `MAX_IDLE_SCROLL_ROUNDS` | `4` | Consecutive empty result reads allowed before ending a run |
 
 The workflow uses this UTC cron schedule:
 
@@ -58,7 +61,7 @@ The workflow uses this UTC cron schedule:
 7,22,37,52 * * * *
 ```
 
-GitHub-hosted scheduled workflows are best effort and can begin later than their requested minute when runners are busy.
+GitHub-hosted scheduled workflows are best effort and can begin later than their requested minute when runners are busy. Each run logs the number of unique X posts and extracted Discord invite URLs, along with the completed scroll count, so collection volume can be inspected in the **Check X and notify Discord** step.
 
 ## State and safety
 
