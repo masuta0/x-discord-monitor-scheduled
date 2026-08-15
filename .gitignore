@@ -9,6 +9,8 @@ cokies*.json
 # Local/generated runtime files
 node_modules/
 seen.json
+!state/
+!state/seen.json
 
 # Logs and editor files
 *.log
