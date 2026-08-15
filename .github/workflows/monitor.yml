@@ -38,6 +38,7 @@ jobs:
         env:
           AUTH_JSON: ${{ secrets.AUTH_JSON }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL_SECONDARY: ${{ secrets.DISCORD_WEBHOOK_URL_SECONDARY }}
           SEARCH_QUERY: ${{ vars.SEARCH_QUERY || 'discord.gg/' }}
           SCROLL_ROUNDS: ${{ vars.SCROLL_ROUNDS || '60' }}
         run: npm start

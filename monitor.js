@@ -45,6 +45,8 @@ const { execSync } = require('child_process');
 const { chromium } = require('playwright');
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
+const DISCORD_WEBHOOK_URL_SECONDARY = process.env.DISCORD_WEBHOOK_URL_SECONDARY;
+const DISCORD_WEBHOOK_URLS = [DISCORD_WEBHOOK_URL, DISCORD_WEBHOOK_URL_SECONDARY].filter(Boolean);
 const SEARCH_QUERY = process.env.SEARCH_QUERY || 'discord.gg/';
 const AUTH_FILE = path.join(__dirname, 'auth.json');
 const SEEN_FILE = path.join(__dirname, 'seen.json');
@@ -177,20 +179,24 @@ async function fetchInviteInfo(inviteCode) {
 }
 
 async function sendToDiscord(inviteUrl) {
-  const res = await fetch(DISCORD_WEBHOOK_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content: `https://${inviteUrl}` }),
-  });
+  const payload = JSON.stringify({ content: `https://${inviteUrl}` });
 
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Discord Webhook error: ${res.status} ${body}`);
-  }
+  await Promise.all(DISCORD_WEBHOOK_URLS.map(async (webhookUrl) => {
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload,
+    });
+
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Discord Webhook error: ${res.status} ${body}`);
+    }
+  }));
 }
 
 async function runOnce() {
-  if (!DISCORD_WEBHOOK_URL) {
+  if (DISCORD_WEBHOOK_URLS.length === 0) {
     throw new Error('DISCORD_WEBHOOK_URL を環境変数に設定してください。');
   }
 

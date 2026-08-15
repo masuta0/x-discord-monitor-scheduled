@@ -36,7 +36,8 @@ The repository needs these two repository secrets:
 | Secret name | Value |
 |---|---|
 | `AUTH_JSON` | Complete Playwright `auth.json` content as raw JSON |
-| `DISCORD_WEBHOOK_URL` | Full Discord webhook URL |
+| `DISCORD_WEBHOOK_URL` | Primary Discord webhook URL |
+| `DISCORD_WEBHOOK_URL_SECONDARY` | Optional second Discord webhook URL; each accepted invite is sent to both endpoints concurrently |
 
 You may optionally add the following repository variables under **Settings → Secrets and variables → Actions → Variables**.
 
