@@ -37,7 +37,7 @@ The repository needs these two repository secrets:
 |---|---|
 | `AUTH_JSON` | Complete Playwright `auth.json` content as raw JSON |
 | `DISCORD_WEBHOOK_URL` | Primary Discord webhook URL |
-| `DISCORD_WEBHOOK_URL_SECONDARY` | Optional second Discord webhook URL; each accepted invite is sent to both endpoints concurrently |
+| `DISCORD_WEBHOOK_URL_SECONDARY` | Optional second Discord webhook URL; each accepted invite is sent to both endpoints concurrently when both are valid |
 
 You may optionally add the following repository variables under **Settings → Secrets and variables → Actions → Variables**.
 
@@ -65,6 +65,6 @@ GitHub-hosted scheduled workflows are best effort and can begin later than their
 
 ## State and safety
 
-`seen.json` avoids repeatedly processing the same Discord invite link. The file is public with the repository and therefore contains only invite URLs, never cookies, webhooks, or other credentials. If GitHub reports a permission error when saving this file, open **Settings → Actions → General** and allow workflows to have **Read and write permissions**.
+`seen.json` stores delivery state per webhook, so a link successfully delivered to one endpoint is not resent there when the other endpoint is temporarily unavailable. The file is public with the repository and therefore contains only invite URLs grouped by endpoint, never cookies, webhooks, or other credentials. If GitHub reports a permission error when saving this file, open **Settings → Actions → General** and allow workflows to have **Read and write permissions**.
 
 Do not publish `auth.json`, a webhook URL, cookies, `.env` files, or logs containing sensitive values.

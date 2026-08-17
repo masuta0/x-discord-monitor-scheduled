@@ -49,7 +49,10 @@ const { chromium } = require('playwright');
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const DISCORD_WEBHOOK_URL_SECONDARY = process.env.DISCORD_WEBHOOK_URL_SECONDARY;
-const DISCORD_WEBHOOK_URLS = [DISCORD_WEBHOOK_URL, DISCORD_WEBHOOK_URL_SECONDARY].filter(Boolean);
+const DISCORD_WEBHOOKS = [
+  ['primary', DISCORD_WEBHOOK_URL],
+  ['secondary', DISCORD_WEBHOOK_URL_SECONDARY],
+].filter(([, url]) => Boolean(url));
 const SEARCH_QUERY = process.env.SEARCH_QUERY || 'discord.gg/';
 const AUTH_FILE = path.join(__dirname, 'auth.json');
 const SEEN_FILE = path.join(__dirname, 'seen.json');
@@ -92,17 +95,37 @@ function findChromium() {
   }
 }
 
+function emptySeenState() {
+  return Object.fromEntries(DISCORD_WEBHOOKS.map(([name]) => [name, new Set()]));
+}
+
 function loadSeen() {
   try {
-    return new Set(JSON.parse(fs.readFileSync(SEEN_FILE, 'utf-8')));
+    const raw = JSON.parse(fs.readFileSync(SEEN_FILE, 'utf-8'));
+    const state = emptySeenState();
+    if (Array.isArray(raw)) {
+      // 旧形式は過去の配信済みリンクとして扱い、再送による重複を避ける。
+      for (const [, seenSet] of Object.entries(state)) raw.forEach((invite) => seenSet.add(invite));
+      return state;
+    }
+    for (const [name, seenSet] of Object.entries(state)) {
+      for (const invite of Array.isArray(raw[name]) ? raw[name] : []) seenSet.add(invite);
+    }
+    return state;
   } catch {
-    return new Set();
+    return emptySeenState();
   }
 }
 
-function saveSeen(seenSet) {
-  const arr = [...seenSet].slice(-MAX_SEEN);
-  fs.writeFileSync(SEEN_FILE, JSON.stringify(arr, null, 2));
+function saveSeen(seenState) {
+  const raw = Object.fromEntries(
+    Object.entries(seenState).map(([name, seenSet]) => [name, [...seenSet].slice(-MAX_SEEN)])
+  );
+  fs.writeFileSync(SEEN_FILE, JSON.stringify(raw, null, 2));
+}
+
+function markSeenForAll(seenState, invite) {
+  for (const [, seenSet] of Object.entries(seenState)) seenSet.add(invite);
 }
 
 function sleep(ms) {
@@ -182,10 +205,9 @@ async function fetchInviteInfo(inviteCode) {
   }
 }
 
-async function sendToDiscord(inviteUrl) {
+async function sendToDiscord(inviteUrl, targets = DISCORD_WEBHOOKS) {
   const payload = JSON.stringify({ content: `https://${inviteUrl}` });
-
-  await Promise.all(DISCORD_WEBHOOK_URLS.map(async (webhookUrl) => {
+  const results = await Promise.allSettled(targets.map(async ([name, webhookUrl]) => {
     const res = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -194,9 +216,20 @@ async function sendToDiscord(inviteUrl) {
 
     if (!res.ok) {
       const body = await res.text();
-      throw new Error(`Discord Webhook error: ${res.status} ${body}`);
+      throw new Error(`${name}: HTTP ${res.status} ${body}`);
     }
+    return name;
   }));
+
+  const succeeded = [];
+  for (const result of results) {
+    if (result.status === 'fulfilled') succeeded.push(result.value);
+    else console.error(`通知失敗(${result.reason?.message || 'unknown error'})`);
+  }
+  if (succeeded.length > 0 && succeeded.length < targets.length) {
+    console.error(`部分成功: ${succeeded.join(', ')}/${targets.length}`);
+  }
+  return succeeded;
 }
 
 function takeFreshTweets(batch, seenPostKeys) {
@@ -210,7 +243,7 @@ function takeFreshTweets(batch, seenPostKeys) {
 }
 
 async function runOnce() {
-  if (DISCORD_WEBHOOK_URLS.length === 0) {
+  if (DISCORD_WEBHOOKS.length === 0) {
     throw new Error('DISCORD_WEBHOOK_URL を環境変数に設定してください。');
   }
 
@@ -344,7 +377,7 @@ async function runOnce() {
     // 招待リンク単位で重複チェック・メンバー数チェック・送信
     for (const invite of [...new Set(invites)]) {
       const normalized = invite.toLowerCase();
-      if (seen.has(normalized)) continue;
+      if (DISCORD_WEBHOOKS.every(([name]) => seen[name].has(normalized))) continue;
 
       const inviteCode = invite.split('/').pop();
       const inviteInfo = await fetchInviteInfo(inviteCode);
@@ -352,7 +385,7 @@ async function runOnce() {
 
       if (inviteInfo?.isFriendInvite) {
         console.log(`スキップ(フレンド申請リンク): https://${invite}`);
-        seen.add(normalized);
+        markSeenForAll(seen, normalized);
         continue;
       }
 
@@ -360,14 +393,14 @@ async function runOnce() {
       if (memberCount !== null && memberCount < MIN_MEMBER_COUNT) {
         console.log(`スキップ(${memberCount}人 < ${MIN_MEMBER_COUNT}): https://${invite}`);
         // 少人数すぎるサーバーも「既知」としてマークし、以後は毎回APIを叩かないようにする
-        seen.add(normalized);
+        markSeenForAll(seen, normalized);
         continue;
       }
 
       if (memberCount !== null && memberCount >= MAX_MEMBER_COUNT) {
         console.log(`スキップ(${memberCount}人 >= ${MAX_MEMBER_COUNT}): https://${invite}`);
         // 大規模サーバーは「既知」としてマークし、以後は毎回APIを叩かないようにする
-        seen.add(normalized);
+        markSeenForAll(seen, normalized);
         continue;
       }
 
@@ -381,14 +414,20 @@ async function runOnce() {
         })
       ) {
         console.log(`スキップ(外国人サーバー判定): https://${invite}`);
-        seen.add(normalized);
+        markSeenForAll(seen, normalized);
         continue;
       }
 
-      await sendToDiscord(invite);
-      console.log(`通知送信: https://${invite}${memberCount !== null ? ` (${memberCount}人)` : ''}`);
+      const pendingTargets = DISCORD_WEBHOOKS.filter(([name]) => !seen[name].has(normalized));
+      const succeeded = await sendToDiscord(invite, pendingTargets);
+      for (const name of succeeded) seen[name].add(normalized);
 
-      seen.add(normalized);
+      if (succeeded.length === 0) {
+        console.error(`通知先がすべて失敗したため未処理のまま再試行: https://${invite}`);
+        continue;
+      }
+
+      console.log(`通知送信(${succeeded.join(', ')}): https://${invite}${memberCount !== null ? ` (${memberCount}人)` : ''}`);
       newCount++;
     }
   }
@@ -398,7 +437,7 @@ async function runOnce() {
   return newCount;
 }
 
-module.exports = { runOnce, takeFreshTweets };
+module.exports = { runOnce, sendToDiscord, takeFreshTweets };
 
 // `node monitor.js` で直接実行した場合(Railwayの Cron Schedule 実行を含む)
 if (require.main === module) {
