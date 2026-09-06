@@ -55,7 +55,8 @@ jobs:
           MAX_IDLE_SCROLL_ROUNDS: ${{ vars.MAX_IDLE_SCROLL_ROUNDS || '10' }}
           INITIAL_POST_WAIT_MS: ${{ vars.INITIAL_POST_WAIT_MS || '12000' }}
           PAGE_LOAD_TIMEOUT_MS: ${{ vars.PAGE_LOAD_TIMEOUT_MS || '60000' }}
-        run: npm start
+          HEADLESS: 'false'
+        run: xvfb-run -a npm start
 
       - name: Persist duplicate-detection state
         run: |
