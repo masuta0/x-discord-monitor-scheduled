@@ -34,29 +34,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Install Chromium for Playwright
-        run: npx playwright install --with-deps chromium
-
       - name: Check X and notify Discord
         env:
-          AUTH_JSON: ${{ secrets.AUTH_JSON }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_WEBHOOK_URL_SECONDARY: ${{ secrets.DISCORD_WEBHOOK_URL_SECONDARY }}
           SEARCH_QUERY: ${{ vars.SEARCH_QUERY || 'discord.gg/' }}
-          SCROLL_ROUNDS: ${{ vars.SCROLL_ROUNDS || '60' }}
+          SEARCH_PAGES: ${{ vars.SEARCH_PAGES || vars.SCROLL_ROUNDS || '10' }}
           MIN_MEMBER_COUNT: ${{ vars.MIN_MEMBER_COUNT || '10' }}
           MAX_MEMBER_COUNT: ${{ vars.MAX_MEMBER_COUNT || '1000' }}
           FOREIGN_SCORE_THRESHOLD: ${{ vars.FOREIGN_SCORE_THRESHOLD || '3' }}
           SPAM_TEXT_MIN_LENGTH: ${{ vars.SPAM_TEXT_MIN_LENGTH || '100' }}
           SPAM_ENGLISH_RATIO: ${{ vars.SPAM_ENGLISH_RATIO || '0.6' }}
           DISCORD_API_DELAY_MS: ${{ vars.DISCORD_API_DELAY_MS || '300' }}
-          SEARCH_SETTLE_MIN_MS: ${{ vars.SEARCH_SETTLE_MIN_MS || '1800' }}
-          SEARCH_SETTLE_JITTER_MS: ${{ vars.SEARCH_SETTLE_JITTER_MS || '1200' }}
-          MAX_IDLE_SCROLL_ROUNDS: ${{ vars.MAX_IDLE_SCROLL_ROUNDS || '10' }}
-          INITIAL_POST_WAIT_MS: ${{ vars.INITIAL_POST_WAIT_MS || '12000' }}
-          PAGE_LOAD_TIMEOUT_MS: ${{ vars.PAGE_LOAD_TIMEOUT_MS || '60000' }}
-          HEADLESS: 'false'
-        run: xvfb-run -a npm start
+        run: npm start
 
       - name: Persist duplicate-detection state
         run: |
