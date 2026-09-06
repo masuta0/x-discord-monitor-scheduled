@@ -153,45 +153,67 @@ function normalizeSearchResult(result) {
   };
 }
 
+async function fetchFxTwitterPage(query, cursor = '') {
+  const params = new URLSearchParams({
+    q: query,
+    count: '100',
+    feed: 'latest',
+  });
+  if (cursor) params.set('cursor', cursor);
+
+  const url = `${FXTWITTER_API}?${params.toString()}`;
+  const res = await fetch(url, {
+    headers: { 'Accept': 'application/json', 'User-Agent': 'x-discord-monitor-scheduled/1.0' },
+  });
+  const bodyText = await res.text();
+  let data;
+  try { data = JSON.parse(bodyText); } catch { data = null; }
+
+  // FxTwitter intentionally returns HTTP 404 for an empty search result.
+  if (res.status === 404 && data && Array.isArray(data.results) && data.results.length === 0) {
+    return { results: [], cursor: { bottom: '' }, empty: true };
+  }
+
+  if (!res.ok || !data || data.code >= 400) {
+    throw new Error(`FxTwitter検索失敗: HTTP ${res.status} ${data?.message || bodyText.slice(0, 300)}`);
+  }
+
+  return data;
+}
+
 async function searchFxTwitter() {
   const tweets = [];
   const seenPostKeys = new Set();
-  let cursor = '';
+  const queries = [...new Set([
+    SEARCH_QUERY,
+    SEARCH_QUERY.replace(/\/+$/, ''),
+  ].filter(Boolean))];
 
-  for (let pageNo = 1; pageNo <= SEARCH_PAGES; pageNo++) {
-    const params = new URLSearchParams({
-      q: SEARCH_QUERY,
-      count: '100',
-      feed: 'latest',
-    });
-    if (cursor) params.set('cursor', cursor);
+  for (const query of queries) {
+    let cursor = '';
+    console.log(`FxTwitter検索開始: ${query}`);
 
-    const url = `${FXTWITTER_API}?${params.toString()}`;
-    const res = await fetch(url, {
-      headers: { 'Accept': 'application/json', 'User-Agent': 'x-discord-monitor-scheduled/1.0' },
-    });
-    const bodyText = await res.text();
-    let data;
-    try { data = JSON.parse(bodyText); } catch { data = null; }
+    for (let pageNo = 1; pageNo <= SEARCH_PAGES; pageNo++) {
+      const data = await fetchFxTwitterPage(query, cursor);
+      const results = Array.isArray(data.results) ? data.results : [];
 
-    if (!res.ok || !data || data.code >= 400) {
-      throw new Error(`FxTwitter検索失敗: HTTP ${res.status} ${data?.message || bodyText.slice(0, 300)}`);
+      for (const result of results) {
+        if (result?.type !== 'status') continue;
+        const tweet = normalizeSearchResult(result);
+        const key = tweet.postKey || `${tweet.xUserName}\n${tweet.text}`;
+        if (seenPostKeys.has(key)) continue;
+        seenPostKeys.add(key);
+        tweets.push(tweet);
+      }
+
+      console.log(`FxTwitter検索: query=${query} ${pageNo}/${SEARCH_PAGES}ページ ${results.length}件`);
+      cursor = data.cursor?.bottom || '';
+      if (!cursor || results.length === 0) break;
+      await sleep(250 + randomInt(0, 300));
     }
 
-    const results = Array.isArray(data.results) ? data.results : [];
-    for (const result of results) {
-      if (result?.type !== 'status') continue;
-      const tweet = normalizeSearchResult(result);
-      const key = tweet.postKey || `${tweet.xUserName}\n${tweet.text}`;
-      if (seenPostKeys.has(key)) continue;
-      seenPostKeys.add(key);
-      tweets.push(tweet);
-    }
-
-    console.log(`FxTwitter検索: ${pageNo}/${SEARCH_PAGES}ページ ${results.length}件`);
-    cursor = data.cursor?.bottom || '';
-    if (!cursor || results.length === 0) break;
-    await sleep(250 + randomInt(0, 300));
+    // The fallback query is only needed when the configured query returned nothing.
+    if (tweets.length > 0) break;
   }
 
   return tweets;
