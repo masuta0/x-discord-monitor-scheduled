@@ -2,8 +2,8 @@ name: Monitor X search results
 
 on:
   schedule:
-    # Every 15 minutes, offset from the top of the hour to reduce congestion.
-    - cron: '7,22,37,52 * * * *'
+    # Every 15 minutes. Keep the schedule on the current workflow revision.
+    - cron: '5,20,35,50 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -16,7 +16,7 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Check out the latest state
@@ -47,9 +47,11 @@ jobs:
           SPAM_TEXT_MIN_LENGTH: ${{ vars.SPAM_TEXT_MIN_LENGTH || '100' }}
           SPAM_ENGLISH_RATIO: ${{ vars.SPAM_ENGLISH_RATIO || '0.6' }}
           DISCORD_API_DELAY_MS: ${{ vars.DISCORD_API_DELAY_MS || '300' }}
-          SEARCH_SETTLE_MIN_MS: ${{ vars.SEARCH_SETTLE_MIN_MS || '1200' }}
-          SEARCH_SETTLE_JITTER_MS: ${{ vars.SEARCH_SETTLE_JITTER_MS || '800' }}
-          MAX_IDLE_SCROLL_ROUNDS: ${{ vars.MAX_IDLE_SCROLL_ROUNDS || '4' }}
+          SEARCH_SETTLE_MIN_MS: ${{ vars.SEARCH_SETTLE_MIN_MS || '1800' }}
+          SEARCH_SETTLE_JITTER_MS: ${{ vars.SEARCH_SETTLE_JITTER_MS || '1200' }}
+          MAX_IDLE_SCROLL_ROUNDS: ${{ vars.MAX_IDLE_SCROLL_ROUNDS || '10' }}
+          INITIAL_POST_WAIT_MS: ${{ vars.INITIAL_POST_WAIT_MS || '12000' }}
+          PAGE_LOAD_TIMEOUT_MS: ${{ vars.PAGE_LOAD_TIMEOUT_MS || '60000' }}
         run: npm start
 
       - name: Persist duplicate-detection state
