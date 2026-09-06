@@ -27,6 +27,7 @@ const SEARCH_SETTLE_JITTER_MS = Number(process.env.SEARCH_SETTLE_JITTER_MS || 12
 const MAX_IDLE_SCROLL_ROUNDS = Number(process.env.MAX_IDLE_SCROLL_ROUNDS || 10);
 const PAGE_LOAD_TIMEOUT_MS = Number(process.env.PAGE_LOAD_TIMEOUT_MS || 60000);
 const INITIAL_POST_WAIT_MS = Number(process.env.INITIAL_POST_WAIT_MS || 12000);
+const HEADLESS = process.env.HEADLESS !== 'false';
 
 function ensureAuthFile() {
   if (fs.existsSync(AUTH_FILE)) return;
@@ -174,8 +175,6 @@ function takeFreshTweets(batch, seenPostKeys) {
 
 async function collectTweetBatch(page) {
   return page.evaluate(() => {
-    // X currently renders tweets as article[data-testid="tweet"].
-    // Keep article as a fallback because X sometimes omits the test id during hydration.
     const primary = Array.from(document.querySelectorAll('article[data-testid="tweet"]'));
     const fallback = Array.from(document.querySelectorAll('article'));
     const elements = primary.length ? primary : fallback;
@@ -188,9 +187,7 @@ async function collectTweetBatch(page) {
 
       const userNameEl = el.querySelector('[data-testid="User-Name"]');
       const userNameLines = (userNameEl?.innerText || '')
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean);
+        .split('\n').map((line) => line.trim()).filter(Boolean);
       const xDisplayName = userNameLines.find((line) => !line.startsWith('@')) || '';
       const handle = userNameLines.find((line) => line.startsWith('@')) || '';
       const xUserName = handle.replace(/^@/, '');
@@ -236,7 +233,6 @@ async function openSearch(page, url) {
 
   if (await waitForTweets(page, INITIAL_POST_WAIT_MS)) return true;
 
-  // X can finish hydrating the search page after the first navigation.
   await page.reload({ waitUntil: 'domcontentloaded', timeout: PAGE_LOAD_TIMEOUT_MS }).catch(() => {});
   return await waitForTweets(page, INITIAL_POST_WAIT_MS);
 }
@@ -252,7 +248,7 @@ async function runOnce() {
 
   try {
     browser = await chromium.launch({
-      headless: true,
+      headless: HEADLESS,
       ...(chromiumPath ? { executablePath: chromiumPath } : {}),
       args: [
         '--disable-dev-shm-usage',
@@ -271,7 +267,6 @@ async function runOnce() {
     });
     const page = await context.newPage();
 
-    // Do not block CSS: X's current React UI can depend on it during hydration.
     await page.route('**/*', (route) => {
       const type = route.request().resourceType();
       if (['image', 'media', 'font'].includes(type)) return route.abort();
@@ -288,7 +283,7 @@ async function runOnce() {
     const url = `https://x.com/search?q=${encodeURIComponent(SEARCH_QUERY)}&src=typed_query&f=live`;
     const loaded = await openSearch(page, url);
 
-    console.log(`X検索ページ: title="${await page.title().catch(() => '')}" url=${page.url()} 投稿要素=${await page.locator('article[data-testid="tweet"], article').count().catch(() => 0)}`);
+    console.log(`ブラウザモード: ${HEADLESS ? 'headless' : 'headed'} / X検索ページ: title="${await page.title().catch(() => '')}" url=${page.url()} 投稿要素=${await page.locator('article[data-testid="tweet"], article').count().catch(() => 0)}`);
 
     if (!loaded) {
       const body = await page.locator('body').innerText().catch(() => '');
@@ -309,14 +304,12 @@ async function runOnce() {
       const freshTweets = takeFreshTweets(batch, seenPostKeys);
       scrollRoundsCompleted = i + 1;
 
-      if (freshTweets.length === 0) {
-        idleScrollRounds++;
-      } else {
+      if (freshTweets.length === 0) idleScrollRounds++;
+      else {
         idleScrollRounds = 0;
         tweets.push(...freshTweets);
       }
 
-      // Give the virtualized list several chances before assuming the feed is exhausted.
       if (i > 3 && idleScrollRounds >= MAX_IDLE_SCROLL_ROUNDS) break;
     }
 
@@ -361,48 +354,40 @@ async function runOnce() {
         markSeenForAll(seen, invite);
         continue;
       }
-      if (memberCount !== null && memberCount >= MAX_MEMBER_COUNT) {
-        console.log(`スキップ(${memberCount}人 >= ${MAX_MEMBER_COUNT}): https://${invite}`);
+      if (memberCount !== null && memberCount > MAX_MEMBER_COUNT) {
+        console.log(`スキップ(${memberCount}人 > ${MAX_MEMBER_COUNT}): https://${invite}`);
         markSeenForAll(seen, invite);
         continue;
       }
 
-      if (isLikelyForeignServer({
+      if (inviteInfo && isLikelyForeignServer({
         xDisplayName: tweet.xDisplayName,
         xUserName: tweet.xUserName,
         tweetText: tweet.text,
-        guildName: inviteInfo?.guildName,
-        guildDescription: inviteInfo?.guildDescription,
+        guildName: inviteInfo.guildName,
+        guildDescription: inviteInfo.guildDescription,
       })) {
-        console.log(`スキップ(外国人サーバー判定): https://${invite}`);
+        console.log(`スキップ(海外サーバー判定): https://${invite}`);
         markSeenForAll(seen, invite);
         continue;
       }
 
-      const pendingTargets = DISCORD_WEBHOOKS.filter(([name]) => !seen[name].has(invite));
-      const succeeded = await sendToDiscord(invite, pendingTargets);
+      const targets = DISCORD_WEBHOOKS.filter(([name]) => !seen[name].has(invite));
+      const succeeded = await sendToDiscord(invite, targets);
       for (const name of succeeded) seen[name].add(invite);
-
-      if (!succeeded.length) {
-        console.error(`通知先がすべて失敗したため再試行対象: https://${invite}`);
-        continue;
+      if (succeeded.length) {
+        newCount++;
+        console.log(`通知成功(${succeeded.join(',')}): https://${invite}`);
       }
-
-      console.log(`通知送信(${succeeded.join(', ')}): https://${invite}${memberCount !== null ? ` (${memberCount}人)` : ''}`);
-      newCount++;
+      await sleep(DISCORD_API_DELAY_MS + randomInt(0, 200));
     }
   }
 
   saveSeen(seen);
   console.log(`完了。新規通知件数: ${newCount}`);
-  return newCount;
 }
 
-module.exports = { runOnce, sendToDiscord, takeFreshTweets, collectTweetBatch };
-
-if (require.main === module) {
-  runOnce().catch((err) => {
-    console.error(err);
-    process.exit(1);
-  });
-}
+runOnce().catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});
