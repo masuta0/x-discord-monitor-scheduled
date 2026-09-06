@@ -1,7 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
-const { chromium } = require('playwright');
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const DISCORD_WEBHOOK_URL_SECONDARY = process.env.DISCORD_WEBHOOK_URL_SECONDARY;
@@ -11,42 +9,17 @@ const DISCORD_WEBHOOKS = [
 ].filter(([, url]) => Boolean(url));
 
 const SEARCH_QUERY = process.env.SEARCH_QUERY || 'discord.gg/';
-const AUTH_FILE = path.join(__dirname, 'auth.json');
 const SEEN_FILE = path.join(__dirname, 'seen.json');
 const DISCORD_INVITE_REGEX = /discord\.gg\/[A-Za-z0-9-]+/gi;
 const MAX_SEEN = 5000;
-const SCROLL_ROUNDS = Number(process.env.SCROLL_ROUNDS || 60);
+const SEARCH_PAGES = Number(process.env.SEARCH_PAGES || process.env.SCROLL_ROUNDS || 10);
 const MIN_MEMBER_COUNT = Number(process.env.MIN_MEMBER_COUNT || 10);
 const MAX_MEMBER_COUNT = Number(process.env.MAX_MEMBER_COUNT || 1000);
 const SPAM_TEXT_MIN_LENGTH = Number(process.env.SPAM_TEXT_MIN_LENGTH || 100);
 const SPAM_ENGLISH_RATIO = Number(process.env.SPAM_ENGLISH_RATIO || 0.6);
 const DISCORD_API_DELAY_MS = Number(process.env.DISCORD_API_DELAY_MS || 300);
 const FOREIGN_SCORE_THRESHOLD = Number(process.env.FOREIGN_SCORE_THRESHOLD || 3);
-const SEARCH_SETTLE_MIN_MS = Number(process.env.SEARCH_SETTLE_MIN_MS || 1800);
-const SEARCH_SETTLE_JITTER_MS = Number(process.env.SEARCH_SETTLE_JITTER_MS || 1200);
-const MAX_IDLE_SCROLL_ROUNDS = Number(process.env.MAX_IDLE_SCROLL_ROUNDS || 10);
-const PAGE_LOAD_TIMEOUT_MS = Number(process.env.PAGE_LOAD_TIMEOUT_MS || 60000);
-const INITIAL_POST_WAIT_MS = Number(process.env.INITIAL_POST_WAIT_MS || 12000);
-const HEADLESS = process.env.HEADLESS !== 'false';
-
-function ensureAuthFile() {
-  if (fs.existsSync(AUTH_FILE)) return;
-  if (process.env.AUTH_JSON) {
-    fs.writeFileSync(AUTH_FILE, process.env.AUTH_JSON, 'utf8');
-    console.log('AUTH_JSON から auth.json を復元しました。');
-    return;
-  }
-  throw new Error('auth.json がありません。AUTH_JSON 環境変数を設定してください。');
-}
-
-function findChromium() {
-  if (process.env.CHROMIUM_PATH) return process.env.CHROMIUM_PATH;
-  try {
-    return execSync('which chromium', { stdio: ['pipe', 'pipe', 'ignore'] }).toString().trim();
-  } catch {
-    return null;
-  }
-}
+const FXTWITTER_API = process.env.FXTWITTER_API || 'https://api.fxtwitter.com/2/search';
 
 function emptySeenState() {
   return Object.fromEntries(DISCORD_WEBHOOKS.map(([name]) => [name, new Set()]));
@@ -126,9 +99,7 @@ function isPromoSpamText(text, hasMedia) {
 
 async function fetchInviteInfo(inviteCode) {
   try {
-    const res = await fetch(
-      `https://discord.com/api/v10/invites/${encodeURIComponent(inviteCode)}?with_counts=true`
-    );
+    const res = await fetch(`https://discord.com/api/v10/invites/${encodeURIComponent(inviteCode)}?with_counts=true`);
     if (!res.ok) return null;
     const data = await res.json();
     if (!data.guild) return { isFriendInvite: true };
@@ -155,7 +126,6 @@ async function sendToDiscord(inviteUrl, targets = DISCORD_WEBHOOKS) {
     if (!res.ok) throw new Error(`${name}: HTTP ${res.status} ${await res.text()}`);
     return name;
   }));
-
   const succeeded = [];
   for (const result of results) {
     if (result.status === 'fulfilled') succeeded.push(result.value);
@@ -164,167 +134,80 @@ async function sendToDiscord(inviteUrl, targets = DISCORD_WEBHOOKS) {
   return succeeded;
 }
 
-function takeFreshTweets(batch, seenPostKeys) {
-  return batch.filter((tweet) => {
-    const postKey = tweet.postKey || `${tweet.xUserName}\n${tweet.text}`;
-    if (seenPostKeys.has(postKey)) return false;
-    seenPostKeys.add(postKey);
-    return true;
-  });
+function normalizeSearchResult(result) {
+  const author = result?.author || {};
+  const media = result?.media || {};
+  const hasMedia = Boolean(
+    (Array.isArray(media.photos) && media.photos.length) ||
+    (Array.isArray(media.videos) && media.videos.length) ||
+    media.external || media.all?.length
+  );
+  const verification = author.verification || {};
+  return {
+    postKey: result?.id ? `https://x.com/${author.screen_name || 'i'}/status/${result.id}` : '',
+    text: result?.text || '',
+    verified: Boolean(verification.verified),
+    hasMedia,
+    xDisplayName: author.name || '',
+    xUserName: author.screen_name || '',
+  };
 }
 
-async function collectTweetBatch(page) {
-  return page.evaluate(() => {
-    const primary = Array.from(document.querySelectorAll('article[data-testid="tweet"]'));
-    const fallback = Array.from(document.querySelectorAll('article'));
-    const elements = primary.length ? primary : fallback;
+async function searchFxTwitter() {
+  const tweets = [];
+  const seenPostKeys = new Set();
+  let cursor = '';
 
-    return elements.map((el) => {
-      const textEls = Array.from(el.querySelectorAll('[data-testid="tweetText"]'));
-      const text = textEls.length
-        ? textEls.map((node) => node.innerText || '').join('\n').trim()
-        : (el.innerText || '').trim();
-
-      const userNameEl = el.querySelector('[data-testid="User-Name"]');
-      const userNameLines = (userNameEl?.innerText || '')
-        .split('\n').map((line) => line.trim()).filter(Boolean);
-      const xDisplayName = userNameLines.find((line) => !line.startsWith('@')) || '';
-      const handle = userNameLines.find((line) => line.startsWith('@')) || '';
-      const xUserName = handle.replace(/^@/, '');
-
-      const statusLink = Array.from(el.querySelectorAll('a[href*="/status/"]'))
-        .map((a) => a.getAttribute('href') || '')
-        .find((href) => /\/[^/]+\/status\/\d+(?:\?|$)/.test(href));
-
-      const hasMedia = Boolean(el.querySelector(
-        '[data-testid="tweetPhoto"], [data-testid="videoPlayer"], [data-testid="videoComponent"], video, img'
-      ));
-      const verified = Boolean(el.querySelector(
-        '[data-testid="icon-verified"], svg[aria-label="Verified account"]'
-      ));
-
-      return {
-        postKey: statusLink ? statusLink.split('?')[0] : '',
-        text,
-        verified,
-        hasMedia,
-        xDisplayName,
-        xUserName,
-      };
+  for (let pageNo = 1; pageNo <= SEARCH_PAGES; pageNo++) {
+    const params = new URLSearchParams({
+      q: SEARCH_QUERY,
+      count: '100',
+      feed: 'latest',
     });
-  });
-}
+    if (cursor) params.set('cursor', cursor);
 
-async function waitForTweets(page, timeout) {
-  try {
-    await page.waitForFunction(
-      () => document.querySelectorAll('article[data-testid="tweet"], article').length > 0,
-      { timeout }
-    );
-    return true;
-  } catch {
-    return false;
+    const url = `${FXTWITTER_API}?${params.toString()}`;
+    const res = await fetch(url, {
+      headers: { 'Accept': 'application/json', 'User-Agent': 'x-discord-monitor-scheduled/1.0' },
+    });
+    const bodyText = await res.text();
+    let data;
+    try { data = JSON.parse(bodyText); } catch { data = null; }
+
+    if (!res.ok || !data || data.code >= 400) {
+      throw new Error(`FxTwitter検索失敗: HTTP ${res.status} ${data?.message || bodyText.slice(0, 300)}`);
+    }
+
+    const results = Array.isArray(data.results) ? data.results : [];
+    for (const result of results) {
+      if (result?.type !== 'status') continue;
+      const tweet = normalizeSearchResult(result);
+      const key = tweet.postKey || `${tweet.xUserName}\n${tweet.text}`;
+      if (seenPostKeys.has(key)) continue;
+      seenPostKeys.add(key);
+      tweets.push(tweet);
+    }
+
+    console.log(`FxTwitter検索: ${pageNo}/${SEARCH_PAGES}ページ ${results.length}件`);
+    cursor = data.cursor?.bottom || '';
+    if (!cursor || results.length === 0) break;
+    await sleep(250 + randomInt(0, 300));
   }
-}
 
-async function openSearch(page, url) {
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: PAGE_LOAD_TIMEOUT_MS });
-  await page.waitForTimeout(2500);
-
-  if (await waitForTweets(page, INITIAL_POST_WAIT_MS)) return true;
-
-  await page.reload({ waitUntil: 'domcontentloaded', timeout: PAGE_LOAD_TIMEOUT_MS }).catch(() => {});
-  return await waitForTweets(page, INITIAL_POST_WAIT_MS);
+  return tweets;
 }
 
 async function runOnce() {
   if (!DISCORD_WEBHOOKS.length) throw new Error('DISCORD_WEBHOOK_URL を環境変数に設定してください。');
-  ensureAuthFile();
 
   const seen = loadSeen();
-  const chromiumPath = findChromium();
-  let browser;
-  let tweets = [];
+  const tweets = await searchFxTwitter();
+  const extractedInviteUrls = new Set(
+    tweets.flatMap((tweet) => tweet.text.match(DISCORD_INVITE_REGEX) || [])
+      .map((invite) => invite.toLowerCase())
+  );
 
-  try {
-    browser = await chromium.launch({
-      headless: HEADLESS,
-      ...(chromiumPath ? { executablePath: chromiumPath } : {}),
-      args: [
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-extensions',
-        '--mute-audio',
-      ],
-    });
-
-    const context = await browser.newContext({
-      storageState: AUTH_FILE,
-      viewport: { width: 1280, height: 900 },
-      userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36',
-    });
-    const page = await context.newPage();
-
-    await page.route('**/*', (route) => {
-      const type = route.request().resourceType();
-      if (['image', 'media', 'font'].includes(type)) return route.abort();
-      return route.continue();
-    });
-
-    page.on('response', (response) => {
-      const url = response.url();
-      if (url.includes('/search') && response.status() >= 400) {
-        console.log(`X検索レスポンス警告: HTTP ${response.status()} ${url.slice(0, 180)}`);
-      }
-    });
-
-    const url = `https://x.com/search?q=${encodeURIComponent(SEARCH_QUERY)}&src=typed_query&f=live`;
-    const loaded = await openSearch(page, url);
-
-    console.log(`ブラウザモード: ${HEADLESS ? 'headless' : 'headed'} / X検索ページ: title="${await page.title().catch(() => '')}" url=${page.url()} 投稿要素=${await page.locator('article[data-testid="tweet"], article').count().catch(() => 0)}`);
-
-    if (!loaded) {
-      const body = await page.locator('body').innerText().catch(() => '');
-      console.log(`投稿要素を待っても見つかりませんでした。本文先頭: ${body.replace(/\s+/g, ' ').slice(0, 700)}`);
-    }
-
-    const seenPostKeys = new Set();
-    let idleScrollRounds = 0;
-    let scrollRoundsCompleted = 0;
-
-    for (let i = 0; i < SCROLL_ROUNDS; i++) {
-      if (i > 0) {
-        await page.evaluate(() => window.scrollBy({ top: Math.floor(1400 + Math.random() * 1200), behavior: 'instant' }));
-        await page.waitForTimeout(SEARCH_SETTLE_MIN_MS + randomInt(0, SEARCH_SETTLE_JITTER_MS));
-      }
-
-      const batch = await collectTweetBatch(page);
-      const freshTweets = takeFreshTweets(batch, seenPostKeys);
-      scrollRoundsCompleted = i + 1;
-
-      if (freshTweets.length === 0) idleScrollRounds++;
-      else {
-        idleScrollRounds = 0;
-        tweets.push(...freshTweets);
-      }
-
-      if (i > 3 && idleScrollRounds >= MAX_IDLE_SCROLL_ROUNDS) break;
-    }
-
-    const extractedInviteUrls = new Set(
-      tweets.flatMap((tweet) => tweet.text.match(DISCORD_INVITE_REGEX) || [])
-        .map((invite) => invite.toLowerCase())
-    );
-
-    console.log(
-      `X検索取得: ${tweets.length}件のユニーク投稿、${extractedInviteUrls.size}件のDiscord招待URL ` +
-      `(${scrollRoundsCompleted}/${SCROLL_ROUNDS}回、連続空読込: ${idleScrollRounds}回)`
-    );
-  } finally {
-    if (browser) await browser.close().catch((err) => console.error('ブラウザのクローズに失敗:', err));
-  }
+  console.log(`X検索取得: ${tweets.length}件のユニーク投稿、${extractedInviteUrls.size}件のDiscord招待URL`);
 
   let newCount = 0;
 
@@ -360,26 +243,24 @@ async function runOnce() {
         continue;
       }
 
-      if (inviteInfo && isLikelyForeignServer({
+      if (isLikelyForeignServer({
         xDisplayName: tweet.xDisplayName,
         xUserName: tweet.xUserName,
         tweetText: tweet.text,
-        guildName: inviteInfo.guildName,
-        guildDescription: inviteInfo.guildDescription,
+        guildName: inviteInfo?.guildName || '',
+        guildDescription: inviteInfo?.guildDescription || '',
       })) {
-        console.log(`スキップ(海外サーバー判定): https://${invite}`);
+        console.log(`スキップ(海外判定): https://${invite}`);
         markSeenForAll(seen, invite);
         continue;
       }
 
-      const targets = DISCORD_WEBHOOKS.filter(([name]) => !seen[name].has(invite));
-      const succeeded = await sendToDiscord(invite, targets);
-      for (const name of succeeded) seen[name].add(invite);
+      const succeeded = await sendToDiscord(invite);
       if (succeeded.length) {
+        for (const name of succeeded) seen[name].add(invite);
         newCount++;
         console.log(`通知成功(${succeeded.join(',')}): https://${invite}`);
       }
-      await sleep(DISCORD_API_DELAY_MS + randomInt(0, 200));
     }
   }
 
@@ -388,6 +269,6 @@ async function runOnce() {
 }
 
 runOnce().catch((err) => {
-  console.error(err);
+  console.error('監視処理に失敗:', err?.stack || err);
   process.exitCode = 1;
 });
