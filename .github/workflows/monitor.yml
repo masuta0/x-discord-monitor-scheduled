@@ -1,6 +1,9 @@
 name: Monitor X search results
 
 on:
+  push:
+    branches:
+      - main
   schedule:
     # Every 15 minutes. Keep the schedule on the current workflow revision.
     - cron: '5,20,35,50 * * * *'
