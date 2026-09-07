@@ -20,6 +20,8 @@ const SPAM_ENGLISH_RATIO = Number(process.env.SPAM_ENGLISH_RATIO || 0.6);
 const DISCORD_API_DELAY_MS = Number(process.env.DISCORD_API_DELAY_MS || 300);
 const FOREIGN_SCORE_THRESHOLD = Number(process.env.FOREIGN_SCORE_THRESHOLD || 3);
 const FXTWITTER_API = process.env.FXTWITTER_API || 'https://api.fxtwitter.com/2/search';
+const FXTWITTER_STATUS_API = process.env.FXTWITTER_STATUS_API || 'https://api.fxtwitter.com/2/status';
+const SEARCH_ENGINE_PAGES = Number(process.env.SEARCH_ENGINE_PAGES || 3);
 
 function emptySeenState() {
   return Object.fromEntries(DISCORD_WEBHOOKS.map(([name]) => [name, new Set()]));
@@ -169,7 +171,6 @@ async function fetchFxTwitterPage(query, cursor = '') {
   let data;
   try { data = JSON.parse(bodyText); } catch { data = null; }
 
-  // FxTwitter intentionally returns HTTP 404 for an empty search result.
   if (res.status === 404 && data && Array.isArray(data.results) && data.results.length === 0) {
     return { results: [], cursor: { bottom: '' }, empty: true };
   }
@@ -212,8 +213,81 @@ async function searchFxTwitter() {
       await sleep(250 + randomInt(0, 300));
     }
 
-    // The fallback query is only needed when the configured query returned nothing.
     if (tweets.length > 0) break;
+  }
+
+  return tweets;
+}
+
+function extractXStatusUrlsFromRss(xml) {
+  const urls = new Set();
+  const itemPattern = /<item>[\s\S]*?<\/item>/gi;
+  for (const item of xml.match(itemPattern) || []) {
+    const candidates = item.match(/https?:\/\/[^\s<]+/gi) || [];
+    for (const raw of candidates) {
+      const clean = raw.replace(/&amp;/g, '&').replace(/[),.]+$/, '');
+      if (/https?:\/\/(?:x\.com|twitter\.com)\/[A-Za-z0-9_]+\/status\/\d+/i.test(clean)) {
+        urls.add(clean);
+      }
+    }
+  }
+  return [...urls];
+}
+
+async function searchBingRss(query) {
+  const searchQuery = `site:x.com "${query.replace(/"/g, '')}"`;
+  const url = `https://www.bing.com/search?format=rss&count=50&q=${encodeURIComponent(searchQuery)}`;
+  const res = await fetch(url, {
+    headers: {
+      'Accept': 'application/rss+xml,application/xml,text/xml;q=0.9,*/*;q=0.8',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
+    },
+  });
+  const xml = await res.text();
+  if (!res.ok) throw new Error(`Bing RSS HTTP ${res.status}`);
+  return extractXStatusUrlsFromRss(xml);
+}
+
+async function fetchFxTwitterStatus(tweetId) {
+  const res = await fetch(`${FXTWITTER_STATUS_API}/${encodeURIComponent(tweetId)}`, {
+    headers: { 'Accept': 'application/json', 'User-Agent': 'x-discord-monitor-scheduled/1.0' },
+  });
+  const bodyText = await res.text();
+  let data;
+  try { data = JSON.parse(bodyText); } catch { data = null; }
+  if (!res.ok || !data?.tweet) return null;
+  return normalizeSearchResult(data.tweet);
+}
+
+async function searchViaSearchEngine() {
+  const queries = [...new Set([
+    SEARCH_QUERY,
+    SEARCH_QUERY.replace(/\/+$/, ''),
+    'discord.gg',
+  ].filter(Boolean))];
+  const tweets = [];
+  const seen = new Set();
+
+  console.log('FxTwitter検索が空だったためBing RSSへフォールバックします。');
+
+  for (const query of queries) {
+    for (let page = 1; page <= SEARCH_ENGINE_PAGES; page++) {
+      try {
+        const urls = await searchBingRss(query);
+        console.log(`Bing RSS検索: query=${query} page=${page} ${urls.length}件`);
+        for (const url of urls) {
+          const match = url.match(/(?:x\.com|twitter\.com)\/[A-Za-z0-9_]+\/status\/(\d+)/i);
+          if (!match || seen.has(match[1])) continue;
+          seen.add(match[1]);
+          const tweet = await fetchFxTwitterStatus(match[1]);
+          if (tweet) tweets.push(tweet);
+        }
+        break;
+      } catch (err) {
+        console.error(`Bing RSS検索失敗(${query}): ${err.message}`);
+        if (page < SEARCH_ENGINE_PAGES) await sleep(1000 * page);
+      }
+    }
   }
 
   return tweets;
@@ -223,7 +297,12 @@ async function runOnce() {
   if (!DISCORD_WEBHOOKS.length) throw new Error('DISCORD_WEBHOOK_URL を環境変数に設定してください。');
 
   const seen = loadSeen();
-  const tweets = await searchFxTwitter();
+  let tweets = await searchFxTwitter();
+
+  if (tweets.length === 0) {
+    tweets = await searchViaSearchEngine();
+  }
+
   const extractedInviteUrls = new Set(
     tweets.flatMap((tweet) => tweet.text.match(DISCORD_INVITE_REGEX) || [])
       .map((invite) => invite.toLowerCase())
